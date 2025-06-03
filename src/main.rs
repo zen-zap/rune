@@ -5,7 +5,7 @@ use rune::UserCommand;
 
 fn main() {
     loop {
-        print!(" >>> ");
+        print!("CustomShell $ ");
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
@@ -26,6 +26,10 @@ fn main() {
 
         println!("Builtin-Check: {}", b_check);
 
+        if b_check {
+            dispatcher::builtin_process(cmd.as_str(), &user_cmd.args);
+        } else {
+            dispatcher::process_external(cmd.as_str(), &user_cmd.args);
+        }
     }
-
 }
