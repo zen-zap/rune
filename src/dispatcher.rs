@@ -3,16 +3,10 @@
 /// function to check if the given command is a built-in tool
 pub fn builtin_check(cmd: &String) -> bool {
     let check = match cmd.as_str() {
-        "cd" => {
-            true
-        }
-        "exit" => {
-            true
-        }
-        "pwd" => {
-            true
-        }
-        "echo" => {
+        "cd" 
+        | "pwd"
+        | "cd"
+        | "echo" => {
             true
         }
         _ => {
@@ -25,12 +19,33 @@ pub fn builtin_check(cmd: &String) -> bool {
 
 
 use std::env;
-use std::path::{Path};
+use std::path::{
+    Path,
+    PathBuf,
+};
+use std::os::unix::io::{
+    RawFd,
+    BorrowedFd,
+};
+use nix::unistd::{
+    write,
+    read,
+};
 
 /// function to process any built-in commands
 ///
+/// Accepts the input_fd and output_fd as RawFd
+///
 /// Verify with builtin_check first
-pub fn builtin_process(cmd: &str, args: &[String]) {
+pub fn builtin_process(cmd: &str, args: &[String], input_fd: RawFd, output_fd: RawFd) {
+
+    let in_fd = unsafe {
+        BorrowedFd::borrow_raw(input_fd)
+    };
+    let out_fd = unsafe {
+        BorrowedFd::borrow_raw(output_fd)
+    };
+
 
     let _ = match cmd {
 
@@ -58,7 +73,10 @@ pub fn builtin_process(cmd: &str, args: &[String]) {
             };
 
             if let Err(e) = env::set_current_dir(&final_dir) {
-                eprintln!("failed to change directories!\ncd {} : {}", dest_path.display(), e);
+                let err_msg = format!("failed to change directories!\ncd {} : {}", dest_path.display(), e);
+
+                write(out_fd, err_msg.as_bytes())
+                    .expect("Failed to write into output fd");
             }
         }
         "pwd" => {
@@ -66,7 +84,12 @@ pub fn builtin_process(cmd: &str, args: &[String]) {
             let curr_dir_path = env::current_dir()
                 .expect("Failed to get the current directory");
 
-            println!("{}", curr_dir_path.display());
+            let output = format!("{}\n", curr_dir_path.display());
+
+            write(out_fd, output.as_bytes())
+                .expect("Failed to write to output file descriptor");
+
+            
         }
         _ => {
             unimplemented!()
@@ -74,12 +97,31 @@ pub fn builtin_process(cmd: &str, args: &[String]) {
     };
 }
 
-/// Build to execute external commands
-pub fn process_external(cmd: &str, args: &[String]) {
-    let mut child = std::process::Command::new(cmd)
-        .args(args)
-        .spawn()
-        .expect("Failed to spawn process for execution!");
+/// function to execute external commands
+///
+/// Accepts an input_fd and output_fd as RawFd
+pub fn process_external(cmd: &str, args: &[String], input_fd: RawFd, output_fd: RawFd) {
 
-    child.wait().expect("Failed to wait for the child");
+    let in_fd = unsafe {
+        BorrowedFd::borrow_raw(input_fd)
+    };
+
+    let out_fd = unsafe {
+        BorrowedFd::borrow_raw(output_fd)
+    };
+}
+
+
+/// Function to load the configuration files at shell start-up
+pub fn load_paths() -> Vec<PathBuf> {
+
+    let conf_path = "../rune.conf";
+
+    let search_paths = std::fs::read_to_string(conf_path)
+        .expect("Failed to read configuration file")
+        .lines()
+        .map(|s| PathBuf::from(s.trim()))
+        .collect();
+
+    search_paths
 }
