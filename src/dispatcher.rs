@@ -1,22 +1,18 @@
 #![allow(unused)]
 
-/// function to check if the given command is a built-in tool
-pub fn builtin_check(cmd: &String) -> bool {
-    let check = match cmd.as_str() {
-        "cd" 
-        | "pwd"
-        | "cd"
-        | "echo" => {
-            true
-        }
-        _ => {
-            false
-        }
-    };
 
-    check
+use std::collections::HashSet;
+use once_cell::sync::Lazy;
+
+static BUILTINS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+    HashSet::from(["cd", "pwd", "echo", "exit"])
+});
+
+/// Checks if the given command is a built-in shell tool.
+/// Accepts any string slice (`&str`).
+pub fn builtin_check(cmd: &str) -> bool {
+    BUILTINS.contains(&cmd)
 }
-
 
 use std::env;
 use std::path::{

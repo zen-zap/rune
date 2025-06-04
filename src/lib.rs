@@ -10,6 +10,7 @@ pub use dispatcher::{
 };
 
 /// Holds the user input command
+#[derive(Clone, Debug)]
 pub struct UserCommand {
     pub cmd: String,
     pub args: Vec<String>,
@@ -34,16 +35,11 @@ pub fn read_line_from_fd(fd: i32) -> Option<String>
     let mut line = Vec::new();
 
     // gotta make sure the given i32 refers to a valid Fd
-    //
-    // Now if you accidentally drop this fd it may lead to errors .. 
-    // So this marks the fd as borrowed so dropping it doesn't close the fd
-    let borrowed = unsafe {
-        BorrowedFd::borrow_raw(fd)
-    };
+
 
     loop {
 
-        let n = read(borrowed, &mut buf).expect("read from fd failed");
+        let n = read(fd, &mut buf).expect("read from fd failed");
 
         if n == 0 {
             break;
