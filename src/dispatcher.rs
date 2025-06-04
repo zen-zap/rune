@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use once_cell::sync::Lazy;
 
 static BUILTINS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    HashSet::from(["cd", "pwd", "echo", "exit"])
+    HashSet::from(["cd", "pwd", "exit"])
 });
 
 /// Checks if the given command is a built-in shell tool.
@@ -21,12 +21,14 @@ use std::path::{
 };
 use std::os::unix::io::{
     RawFd,
+    FromRawFd,
     BorrowedFd,
 };
 use nix::unistd::{
     write,
     read,
 };
+use std::os::unix::process::CommandExt;
 
 /// function to process any built-in commands
 ///
@@ -84,8 +86,10 @@ pub fn builtin_process(cmd: &str, args: &[String], input_fd: RawFd, output_fd: R
 
             write(out_fd, output.as_bytes())
                 .expect("Failed to write to output file descriptor");
+        }
 
-            
+        "echo" => {
+            builtin_echo(args);
         }
         _ => {
             unimplemented!()
@@ -93,18 +97,38 @@ pub fn builtin_process(cmd: &str, args: &[String], input_fd: RawFd, output_fd: R
     };
 }
 
-/// function to execute external commands
-///
-/// Accepts an input_fd and output_fd as RawFd
+use std::process::{Command, Stdio};
+use std::ffi::OsStr;
+
+/// Executes an external command, wiring up its stdin and stdout to the given file descriptors.
+/// - `cmd`: the command to run (e.g., "ls")
+/// - `args`: the arguments to pass (without the command itself)
+/// - `input_fd`: the file descriptor to use for stdin
+/// - `output_fd`: the file descriptor to use for stdout
 pub fn process_external(cmd: &str, args: &[String], input_fd: RawFd, output_fd: RawFd) {
 
-    let in_fd = unsafe {
-        BorrowedFd::borrow_raw(input_fd)
+    let stdin = unsafe {
+        Stdio::from_raw_fd(input_fd)
+    };
+    let stdout = unsafe {
+        Stdio::from_raw_fd(output_fd)
     };
 
-    let out_fd = unsafe {
-        BorrowedFd::borrow_raw(output_fd)
-    };
+    let mut command = Command::new(cmd);
+
+    command.args(args.iter().map(|s| OsStr::new(s)));
+    // Set up redirected stdin/stdout
+    command.stdin(stdin);
+    command.stdout(stdout);
+    // Set stderr to inherit from the shell, so errors are visible
+    command.stderr(Stdio::inherit());
+
+    // Actually exec the command, replacing the child process image
+    // This will NOT return if successful
+    let error = command.exec();
+    // If exec fails, print error and exit
+    eprintln!("rune: failed to execute {}: {}", cmd, error);
+    std::process::exit(1);
 }
 
 
@@ -120,4 +144,30 @@ pub fn load_paths() -> Vec<PathBuf> {
         .collect();
 
     search_paths
+}
+
+pub fn builtin_echo(args: &[String]) {
+    let mut iter = args.iter();
+    let mut no_newline = false;
+
+    // Check for -n flag(s)
+    while let Some(arg) = iter.next() {
+        if arg == "-n" {
+            no_newline = true;
+        } else {
+            print!("{}", arg);
+            break;
+        }
+    }
+
+    // Print the rest of the args with spaces
+    for arg in iter {
+        print!(" {}", arg);
+    }
+
+    if !no_newline {
+        println!();
+    } else {
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+    }
 }
