@@ -12,11 +12,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rust-lang/setup-rust@v1
+
+      - uses: actions-rs/toolchain@v1
         with:
-          rust-version: stable
+          toolchain: stable
+          override: true
+          profile: minimal
+
       - run: cargo build --release
+
       - run: mv target/release/rune target/release/rune-linux
+
       - uses: softprops/action-gh-release@v2
         with:
           files: target/release/rune-linux
@@ -27,11 +33,17 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rust-lang/setup-rust@v1
+
+      - uses: actions-rs/toolchain@v1
         with:
-          rust-version: stable
+          toolchain: stable
+          override: true
+          profile: minimal
+
       - run: cargo build --release
+
       - run: mv target/release/rune target/release/rune-macos
+
       - uses: softprops/action-gh-release@v2
         with:
           files: target/release/rune-macos
