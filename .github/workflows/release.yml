@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-rust@v1
+        with:
+          rust-version: stable
+      - run: cargo build --release
+      - run: mv target/release/rune target/release/rune-linux
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/rune-linux
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-rust@v1
+        with:
+          rust-version: stable
+      - run: cargo build --release
+      - run: mv target/release/rune target/release/rune-macos
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/rune-macos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}       
