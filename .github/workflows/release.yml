@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-rust@v1
+      - uses: rust-lang/setup-rust@v1
         with:
           rust-version: stable
       - run: cargo build --release
@@ -27,7 +27,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-rust@v1
+      - uses: rust-lang/setup-rust@v1
         with:
           rust-version: stable
       - run: cargo build --release
@@ -36,4 +36,4 @@ jobs:
         with:
           files: target/release/rune-macos
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}       
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
