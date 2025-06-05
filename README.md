@@ -7,10 +7,11 @@ A custom Unix-like shell implemented in Rust.
 ## Features
 
 ### Command Execution
-- **External Commands:** Runs any executable available in `$PATH` (e.g., `ls`, `grep`, `cat`).
+- **External Commands:** Runs any executable available in `rune.conf` (e.g., `ls`, `grep`, `cat`). 
 - **Built-ins:** Supports standard built-in commands:
   - `cd [dir]` — Change directory
   - `pwd` — Print current working directory
+  - `echo` — Display some message
   - `exit [code]` — Exit the shell with an optional status code
 
 ### Pipelines
@@ -71,7 +72,7 @@ RuneShell $ exit
 
 ## Important!
 
-It looks for a rune.conf file in `../rune` which is the parent directory of the rune directory, when you clone the repository.
+It looks for a `rune.conf` file in `../rune` which is the parent directory of the rune directory, when you clone the repository.
 
 Example Configuration:
 ```
