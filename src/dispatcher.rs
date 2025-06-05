@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use once_cell::sync::Lazy;
 
 static BUILTINS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    HashSet::from(["cd", "pwd", "exit"])
+    HashSet::from(["cd", "pwd", "exit", "echo"])
 });
 
 /// Checks if the given command is a built-in shell tool.
@@ -170,4 +170,38 @@ pub fn builtin_echo(args: &[String]) {
     } else {
         std::io::Write::flush(&mut std::io::stdout()).unwrap();
     }
+}
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+
+pub fn is_executable(path: &Path) -> bool {
+
+    if let Ok(metadata) = fs::metadata(&path) {
+        let perms = metadata.permissions();
+        metadata.is_file() && (perms.mode() & 0o111 != 0)
+    } else {
+        false
+    }
+}
+
+pub fn find_command(cmd: &str, search_paths: &[PathBuf]) -> Option<PathBuf> {
+
+    if cmd.contains('/') {
+        let path = PathBuf::from(cmd);
+        if is_executable(&path) {
+            return Some(path);
+        } else {
+            return None;
+        }
+    }
+
+    for dir in search_paths {
+        let candidate = dir.join(cmd);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    None
 }

@@ -1,6 +1,4 @@
-
 #![allow(unused)]
-
 use nix::{
     unistd::{pipe, fork, ForkResult, dup2, close, setpgid, write},
     sys::{
@@ -16,32 +14,37 @@ use std::os::unix::process::CommandExt;
 use std::fs;
 use std::os::unix::io::{BorrowedFd, RawFd, AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn main() {
     // Debug: print our PID so we can inspect /proc/<pid>/fd or lsof
-    eprintln!("Debug: RuneShell PID = {}", std::process::id());
+    eprintln!("[Debug] RuneShell PID = {}", std::process::id()); // prints to FD 2 (stderr)
+
+    let search_paths = dispatcher::load_paths();
 
     loop {
         // Print prompt to stdout (fd 1)
+        // We don't want to take ownership of the file descriptor for now 
         let std_out_fd = unsafe { BorrowedFd::borrow_raw(1) };
-        let _ = write(std_out_fd, b"RuneShell $ <READY>\n").unwrap();
-        eprintln!("Debug: Prompt written to fd 1");
+        let _ = write(std_out_fd, b"[PROMPT] RuneShell $ ").unwrap();
+        eprintln!("[Debug] Prompt written to fd 1");
 
         // so to read input .. we need some file descriptor that provides us with the input fd
+        // read_line_from_fd blocks on that fd until we type into it 
         let input = match read_line_from_fd(0) {
             Some(line) => {
-                eprintln!("Debug: Read line from stdin: {:?}", line);
+                eprintln!("[Debug] Read line from stdin: {:#?}", line);
                 line.trim().to_owned()
             }
             None => {
-                eprintln!("Debug: read_line_from_fd returned None, continuing");
+                eprintln!("[Debug] read_line_from_fd returned None, continuing");
                 continue;
             }
         };
 
         if input.is_empty() {
-            eprintln!("Debug: Input was empty, continuing");
+            eprintln!("[Debug] Input was empty, continuing");
             continue;
         }
 
@@ -49,51 +52,56 @@ fn main() {
         let is_pipe = segments.len() > 1;
 
         if is_pipe {
-            println!("Pipe Execution");
-            eprintln!("Debug: Detected pipeline with {} segments", segments.len());
-            run_pipeline(segments);
+            eprintln!("[Debug] Detected pipeline with {} segments", segments.len());
+            run_pipeline(segments, &search_paths);
         } else {
-            println!("Normal Execution");
-            eprintln!("Debug: Single command execution: {}", input);
-            run(input);
+            eprintln!("[Debug] Single command execution: {}", input);
+            run(input, &search_paths);
         }
     }
 }
 
 /// Normal run if not pipeline
-pub fn run(input: String) {
-    eprintln!("Debug: Entering run() with input {:?}", input);
+pub fn run(input: String, search_paths: &[PathBuf]) {
+    eprintln!("[Debug] Entering run() with input {:#?}", input);
 
     let user_cmd: UserCommand = parser::parse(input.as_str())
         .expect("Failed to parse!");
-    eprintln!("Debug: Parsed UserCommand: cmd='{}', args={:?}", user_cmd.cmd, user_cmd.args);
+    eprintln!("[Debug] Parsed UserCommand: cmd='{}', args={:#?}", user_cmd.cmd, user_cmd.args);
 
     let cmd = user_cmd.cmd.clone();
     let args = user_cmd.args.clone();
     let is_builtin = dispatcher::builtin_check(&cmd);
-    eprintln!("Debug: builtin_check('{}') returned {}", cmd, is_builtin);
-
-    println!("Builtin-Check: {}", is_builtin);
+    eprintln!("[Debug] builtin_check('{}') returned {}", cmd, is_builtin);
 
     if is_builtin {
-        println!("Continuing with Normal Execution");
-        eprintln!("Debug: Invoking builtin_process for '{}'", cmd);
+        eprintln!("[Debug] Invoking builtin_process for '{}'", cmd);
         dispatcher::builtin_process(cmd.as_str(), &user_cmd.args, 0, 1);
     } else {
 
-        println!("Builtin-Check: false -> forking for external");
+        let exec_path = dispatcher::find_command(&cmd, search_paths);
+        if exec_path.is_none() {
+            eprintln!("[Error] Command not Found: {cmd}");
+            println!("rune command not found: {cmd}");
+            return;
+        }
+
+        let exe = exec_path.unwrap();
+
 
         match unsafe { fork() } {
             Ok(ForkResult::Child) => {
                 // Child: set up I/O redirection to fds 0 and 1 (terminal)
-                eprintln!("[Child] Executing external '{}' with args {:?}", cmd, args);
+                eprintln!("[Debug] -> [Child] Executing external '{}' with args {:?}", cmd, args);
 
                 // Convert raw fds 0 and 1 into Stdio handles
+                // Read from FD 0
                 let stdin  = unsafe { Stdio::from_raw_fd(0) };
+                // Write to FD 1
                 let stdout = unsafe { Stdio::from_raw_fd(1) };
 
-                // Build the command to exec
-                let mut cmd_proc = Command::new(&cmd);
+                // Send the command to execv using Command::exec() -- done later
+                let mut cmd_proc = Command::new(&exe);
                 cmd_proc.args(args.iter().map(|s| OsStr::new(s)))
                         .stdin(stdin)
                         .stdout(stdout)
@@ -101,18 +109,18 @@ pub fn run(input: String) {
 
                 // Replace the child with the external program
                 let err = cmd_proc.exec();
-                eprintln!("rune: failed to exec '{}': {}", cmd, err);
+                eprintln!("[Error] rune: failed to exec '{}': {}", cmd, err);
                 std::process::exit(1);
             }
             Ok(ForkResult::Parent { child }) => {
                 // Parent: wait for the child to finish
-                eprintln!("[Parent] Forked child PID = {}", child);
+                eprintln!("[Debug] -> [Parent] Forked child PID = {}", child);
                 let _ = waitpid(child, None);
-                eprintln!("[Parent] Child {} exited, returning to prompt", child);
+                eprintln!("[Debug] -> [Parent] Child {} exited, returning to prompt", child);
                 // After waitpid returns, control goes back to main loop (prompt)
             }
             Err(err) => {
-                eprintln!("fork failed: {}", err);
+                eprintln!("[Error] fork failed: {}", err);
             }        
         }
         
@@ -121,7 +129,7 @@ pub fn run(input: String) {
 
 
 /// To run a pipeline input
-pub fn run_pipeline(segments: Vec<&str>) {
+pub fn run_pipeline(segments: Vec<&str>, search_paths: &[PathBuf]) {
     // Debug: show the list of pipeline segments
     eprintln!("Debug: Starting run_pipeline with segments: {:?}", segments);
 
@@ -135,6 +143,8 @@ pub fn run_pipeline(segments: Vec<&str>) {
     }
 
     let mut pids = Vec::with_capacity(commands.len());
+    // read ends of pipes for each process
+    // after the first step it becomes the read end for the next process in the pipe
     let mut input_fd: RawFd = 0;       // initially stdin of the shell
     let mut pgid: Option<nix::unistd::Pid> = None;
 
@@ -164,53 +174,56 @@ pub fn run_pipeline(segments: Vec<&str>) {
             Ok(ForkResult::Child) => {
                 // child process
                 let pid = nix::unistd::getpid();
-                eprintln!("[Child-{}:{}] Forked (is_last={})", i, pid, is_last);
+                eprintln!("[Child-{} : {}] Forked (is_last={})", i, pid, is_last);
 
                 // Set up process group so pipeline stages share a pgid
                 if i == 0 {
                     // first child becomes its own group leader
                     setpgid(pid, pid).ok();
-                    eprintln!("[Child-{}:{}] setpgid({}, {}) (new pgid)", i, pid, pid, pid);
+                    eprintln!("[Child-{} : {}] setpgid({}, {}) (new pgid)", i, pid, pid, pid);
                 } else if let Some(parent_pgid) = pgid {
                     // subsequent children join the same pgid
                     setpgid(pid, parent_pgid).ok();
                     eprintln!(
-                        "[Child-{}:{}] setpgid({}, {})",
+                        "[Child-{} : {}] setpgid({}, {})",
                         i, pid, pid, parent_pgid
                     );
                 }
 
                 // Redirect stdin if input_fd ≠ 0
+                // make FD 0 read from previous pipe's read-end
                 if input_fd != 0 {
-                    eprintln!("[Child-{}:{}] dup2({}, 0) to become stdin", i, pid, input_fd);
+                    eprintln!("[Child-{} : {}] dup2({}, 0) to become stdin", i, pid, input_fd);
                     dup2(input_fd, 0).unwrap();
                     close(input_fd).ok();
-                    eprintln!("[Child-{}:{}] closed original input_fd {}", i, pid, input_fd);
+                    eprintln!("[Child-{} : {}] closed original input_fd {}", i, pid, input_fd);
                 }
 
                 // Redirect stdout if write_fd exists
+                // if some write_fd exists .. we need to redirect FD 1 to that so
+                // it writes to the new pipe's [upcoming pipe's] read end
                 if let Some(w) = write_fd {
                     let raw_w = w.as_raw_fd();
                     eprintln!(
-                        "[Child-{}:{}] dup2({}, 1) to become stdout",
+                        "[Child-{} : {}] dup2({}, 1) to become stdout",
                         i, pid, raw_w
                     );
                     dup2(raw_w, 1).unwrap();
                     // We passed the raw fd into dup2, so drop the OwnedFd
                     let _ = w.into_raw_fd();
-                    eprintln!("[Child-{}:{}] dropped OwnedFd for write_fd {}", i, pid, raw_w);
+                    eprintln!("[Child-{} : {}] dropped OwnedFd for write_fd {}", i, pid, raw_w);
                 }
 
                 // If there is a read_fd for this stage, close it in the child
                 if let Some(r) = read_fd {
                     let raw_r = r.into_raw_fd();
-                    eprintln!("[Child-{}:{}] dropped OwnedFd for read_fd {}", i, pid, raw_r);
+                    eprintln!("[Child-{} : {}] dropped OwnedFd for read_fd {}", i, pid, raw_r);
                 }
 
                 // Now execute the command. Built‐in vs external:
                 if dispatcher::builtin_check(&user_cmd.cmd) {
                     eprintln!(
-                        "[Child-{}:{}] Running builtin '{}'",
+                        "[Child-{} : {}] Running builtin '{}'",
                         i, pid, &user_cmd.cmd
                     );
                     dispatcher::builtin_process(
@@ -218,11 +231,23 @@ pub fn run_pipeline(segments: Vec<&str>) {
                         &user_cmd.args,
                         0, // child’s stdin is already fd 0
                         1, // child’s stdout is already fd 1
-                    );
+                    );  
                     std::process::exit(0);
                 } else {
+
+                    let cmd = &user_cmd.cmd;
+
+                    let exec_path = dispatcher::find_command(cmd.as_str(), search_paths);
+                    if exec_path.is_none() {
+                        eprintln!("[Error] Command not Found: {}", cmd.as_str());
+                        println!("rune command not found: {}", cmd.as_str());
+                        return;
+                    }
+
+                    let exe = exec_path.unwrap();
+                    
                     eprintln!(
-                        "[Child-{}:{}] Running external '{}', args={:?}",
+                        "[Child-{} : {}] Running external '{}', args={:?}",
                         i, pid, &user_cmd.cmd, &user_cmd.args
                     );
 
@@ -231,7 +256,7 @@ pub fn run_pipeline(segments: Vec<&str>) {
                     let stdout = unsafe { std::process::Stdio::from_raw_fd(1) };
 
                     // Build and exec the command
-                    let mut cmd_proc = Command::new(&user_cmd.cmd);
+                    let mut cmd_proc = Command::new(&exe);
                     cmd_proc
                         .args(user_cmd.args.iter().map(|s| OsStr::new(s)))
                         .stdin(stdin)
@@ -240,7 +265,7 @@ pub fn run_pipeline(segments: Vec<&str>) {
 
                     let err = cmd_proc.exec();
                     eprintln!(
-                        "rune: failed to exec '{}': {}",
+                        "rune: failed to exec '{}' : {}",
                         &user_cmd.cmd, err
                     );
                     std::process::exit(1);
@@ -248,6 +273,7 @@ pub fn run_pipeline(segments: Vec<&str>) {
             }
 
             Ok(ForkResult::Parent { child }) => {
+                // This stage happens immediately after forking
                 // parent process
                 eprintln!("[Parent] Forked child {} for stage {}", child, i);
 
